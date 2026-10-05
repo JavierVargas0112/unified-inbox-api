@@ -4,7 +4,8 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 /** Shared by main.ts and the e2e tests, so both run the exact same pipeline. */
 export function configureApp(app: INestApplication): void {
   app.useGlobalPipes(
-    new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
+    // Providers add fields over time: unknown fields are stripped, not rejected.
+    new ValidationPipe({ whitelist: true, transform: true }),
   );
 
   const config = new DocumentBuilder()
