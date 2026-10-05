@@ -16,6 +16,13 @@ RUN npm ci --omit=dev && npm cache clean --force
 # ---- runtime: no compiler, no dev tools, non-root ----
 FROM node:22-alpine
 ENV NODE_ENV=production PORT=3000
+# Patch OS packages, and drop the package managers shipped with the Node image:
+# the app never runs them, and their bundled dependencies are the usual source
+# of scanner findings.
+RUN apk upgrade --no-cache \
+ && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+           /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+           /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
