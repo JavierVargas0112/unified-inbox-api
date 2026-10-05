@@ -1,5 +1,5 @@
 # ---- build: compile TypeScript with dev dependencies ----
-FROM node:22-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -8,13 +8,13 @@ COPY src ./src
 RUN npm run build
 
 # ---- deps: production dependencies only ----
-FROM node:22-alpine AS deps
+FROM node:26-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 # ---- runtime: no compiler, no dev tools, non-root ----
-FROM node:22-alpine
+FROM node:26-alpine
 ENV NODE_ENV=production PORT=3000
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
