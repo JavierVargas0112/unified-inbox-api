@@ -1,14 +1,12 @@
 import type { Config } from 'jest';
 
-// Unit tests: pure logic, no database. `npm test`.
+// End-to-end tests: the real app against a real PostgreSQL. Needs DATABASE_URL.
 const config: Config = {
-  displayName: 'unit',
-  rootDir: '.',
-  roots: ['<rootDir>/src'],
+  displayName: 'e2e',
+  rootDir: '..',
   testEnvironment: 'node',
   moduleFileExtensions: ['js', 'json', 'ts'],
-  testRegex: '.*\\.spec\\.ts$',
-  // Same tsconfig in both projects, so their coverage maps line up when merged.
+  testRegex: 'test/.*\\.e2e-spec\\.ts$',
   transform: { '^.+\\.ts$': ['ts-jest', { tsconfig: '<rootDir>/tsconfig.json' }] },
 };
 
