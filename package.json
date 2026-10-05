@@ -20,7 +20,8 @@
     "test:cov": "jest --coverage",
     "test:e2e": "jest --config test/jest-e2e.config.ts --runInBand",
     "migration:run": "typeorm migration:run -d dist/database/data-source.js",
-    "migration:revert": "typeorm migration:revert -d dist/database/data-source.js"
+    "migration:revert": "typeorm migration:revert -d dist/database/data-source.js",
+    "schema:check": "node scripts/check-schema-drift.js"
   },
   "dependencies": {
     "@nestjs/common": "^11.2.7",
