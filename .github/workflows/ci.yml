@@ -1,0 +1,167 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push on the same branch cancels the run it makes obsolete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: 22
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  quality:
+    name: Lint, format, typecheck, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+
+  test:
+    name: Tests (unit + e2e on PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: inbox
+          POSTGRES_PASSWORD: inbox
+          POSTGRES_DB: inbox_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U inbox"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      DATABASE_URL: postgres://inbox:inbox@localhost:5432/inbox_test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Apply migrations to an empty database
+        run: npm run migration:run
+      - name: Check entities and migrations agree
+        run: npm run schema:check
+      - name: Unit + e2e tests with coverage gate
+        run: npm run test:ci
+      - name: Coverage summary
+        if: always()
+        run: |
+          if [ -f coverage/coverage-summary.json ]; then
+            node -e '
+              const t = require("./coverage/coverage-summary.json").total;
+              const rows = ["lines", "statements", "functions", "branches"]
+                .map((k) => `| ${k} | ${t[k].pct}% |`).join("\n");
+              console.log(`### Coverage\n\n| metric | % |\n|---|---|\n${rows}`);
+            ' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 7
+
+  image:
+    name: Docker image (build, scan, publish)
+    needs: [quality, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,format=long
+            type=raw,value=latest,enable={{is_default_branch}}
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test the container
+        run: |
+          docker network create smoke
+          docker run -d --name db --network smoke \
+            -e POSTGRES_USER=inbox -e POSTGRES_PASSWORD=inbox -e POSTGRES_DB=inbox \
+            postgres:16-alpine
+          until docker exec db pg_isready -U inbox; do sleep 1; done
+          docker run -d --name api --network smoke -p 3000:3000 \
+            -e DATABASE_URL=postgres://inbox:inbox@db:5432/inbox \
+            ${{ env.IMAGE }}:sha-${{ github.sha }}
+          for i in $(seq 1 30); do
+            curl -fsS localhost:3000/health && exit 0
+            sleep 1
+          done
+          docker logs api
+          exit 1
+      - name: Scan image for vulnerabilities (fixable, high and above)
+        uses: anchore/scan-action@v7
+        with:
+          image: ${{ env.IMAGE }}:sha-${{ github.sha }}
+          fail-build: true
+          severity-cutoff: high
+          only-fixed: true
+      - name: Push to GitHub Container Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker push --all-tags ${{ env.IMAGE }}
+
+  deploy:
+    name: Deploy to Render
+    needs: [image]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Trigger deploy
+        env:
+          DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$DEPLOY_HOOK" ]; then
+            echo "::warning::RENDER_DEPLOY_HOOK_URL is not set: skipping deploy."
+            exit 0
+          fi
+          curl -fsS -X POST "$DEPLOY_HOOK" > /dev/null
+      - name: Wait for the new version to answer
+        if: vars.RENDER_SERVICE_URL != ''
+        run: |
+          # Render free instances can take a while to build and wake up.
+          sleep 60
+          for i in $(seq 1 40); do
+            curl -fsS "${{ vars.RENDER_SERVICE_URL }}/health" && exit 0
+            sleep 15
+          done
+          exit 1
