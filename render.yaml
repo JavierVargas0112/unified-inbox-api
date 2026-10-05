@@ -1,0 +1,21 @@
+# Render Blueprint: creates the API and its database.
+# Auto-deploy is off on purpose: GitHub Actions triggers the deploy hook
+# only after lint, tests, the image scan and the smoke test have passed.
+services:
+  - type: web
+    name: unified-inbox-api
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    autoDeployTrigger: 'off'
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: unified-inbox-db
+          property: connectionString
+
+databases:
+  - name: unified-inbox-db
+    plan: free
+    databaseName: inbox
+    user: inbox
